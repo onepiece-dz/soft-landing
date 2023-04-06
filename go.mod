@@ -1,3 +1,3 @@
-module github.com/onepiece-dz/soft_landing
+module github.com/onepiece-dz/soft-landing
 
 go 1.20
