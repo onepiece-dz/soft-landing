@@ -1,8 +1,8 @@
-**graceful- shutdown提供一个优雅关闭服务的能力**  
-支持按照优先级（level）分组执行关闭任务，用户可以自定义资源关闭顺序，
+# 介绍
+**graceful- shutdown提供一个优雅关闭服务的能力**，支持按照优先级（level）分组执行关闭任务，用户可以自定义资源关闭顺序，
 比如，先关闭http/rpc/mq服务连接，再关闭内部资源连接
 
-## 使用方式
+# 使用样例
     package main
 
     import (
