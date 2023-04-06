@@ -15,6 +15,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -30,6 +31,13 @@ const shutdownPollIntervalMax = 500 * time.Millisecond
 var logger Logger
 
 var defaultLog = log.New(os.Stdout, "gracefulCloser: ", log.LstdFlags)
+
+// ShutdownSignals receives shutdown signals to process
+var ShutdownSignals = []os.Signal{
+	os.Interrupt, os.Kill, syscall.SIGKILL, syscall.SIGSTOP,
+	syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGILL, syscall.SIGTRAP,
+	syscall.SIGABRT, syscall.SIGSYS, syscall.SIGTERM,
+}
 
 type Logger interface {
 	Print(info string)
@@ -55,6 +63,9 @@ func NewAndMonitor(timeout time.Duration, sig ...os.Signal) *GracefulCloser {
 		closeFuncChain: make(map[int][]func(ctx context.Context)),
 		quit:           make(chan os.Signal, 1),
 		timeout:        timeout,
+	}
+	if len(sig) == 0 {
+		sig = ShutdownSignals
 	}
 	signal.Notify(gracefulCloser.quit, sig...)
 	return gracefulCloser
