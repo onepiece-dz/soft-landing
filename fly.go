@@ -48,10 +48,11 @@ func CustomLog(customLogger Logger) {
 }
 
 type GracefulCloser struct {
-	closeFuncChain map[int][]func(ctx context.Context)
-	timeout        time.Duration
-	mutex          sync.Mutex
-	quit           chan os.Signal // quit chan os.Signal
+	closeFuncChain       map[int][]func(ctx context.Context)
+	levelAfterClosedWait map[int]time.Duration
+	timeout              time.Duration
+	mutex                sync.Mutex
+	quit                 chan os.Signal // quit chan os.Signal
 }
 
 // NewAndMonitor new a gracefulCloser, and monitor it, timeout: wait timeout for graceful close, stop signal to monitor
@@ -60,9 +61,10 @@ func NewAndMonitor(timeout time.Duration, sig ...os.Signal) *GracefulCloser {
 		timeout = 30 * time.Second
 	}
 	gracefulCloser := &GracefulCloser{
-		closeFuncChain: make(map[int][]func(ctx context.Context)),
-		quit:           make(chan os.Signal, 1),
-		timeout:        timeout,
+		closeFuncChain:       make(map[int][]func(ctx context.Context)),
+		quit:                 make(chan os.Signal, 1),
+		levelAfterClosedWait: make(map[int]time.Duration),
+		timeout:              timeout,
 	}
 	if len(sig) == 0 {
 		sig = ShutdownSignals
@@ -93,6 +95,25 @@ func (closer *GracefulCloser) AddCloser(level int, closerCoequal ...func(ctx con
 	} else {
 		closer.closeFuncChain[level] = closerCoequal
 	}
+	return closer
+}
+
+func (closer *GracefulCloser) AddCloserLevelWait(level int, levelWait time.Duration, closerCoequal ...func(ctx context.Context)) *GracefulCloser {
+	if closerCoequal == nil {
+		// TODO log
+		return closer
+	}
+	closer.mutex.Lock()
+	defer closer.mutex.Unlock()
+
+	if value, exists := closer.closeFuncChain[level]; exists {
+		closer.closeFuncChain[level] = append(value, closerCoequal...)
+	} else {
+		closer.closeFuncChain[level] = closerCoequal
+	}
+
+	closer.levelAfterClosedWait[level] = levelWait
+
 	return closer
 }
 
@@ -129,10 +150,12 @@ func (closer *GracefulCloser) SoftLanding(done chan<- bool) {
 				logger.Print(fmt.Sprintf("Start to execute closeFunc of group %v", level))
 			}
 
-			// execution errors, directly ended
-			err := doShutdown(closer.closeFuncChain[level], ctx)
-			if err != nil {
-				break
+			// execute level closer
+			doShutdown(closer.closeFuncChain[level], ctx)
+
+			// wait some time and then execute next level closer
+			if waitTime, ok := closer.levelAfterClosedWait[level]; ok {
+				time.Sleep(waitTime)
 			}
 		}
 
@@ -153,7 +176,7 @@ func sortLevel(closeFuncChain map[int][]func(ctx context.Context)) []int {
 }
 
 // Execute the close operation and execute closeFunS concurrently
-func doShutdown(closeFunS []func(ctx context.Context), ctx context.Context) error {
+func doShutdown(closeFunS []func(ctx context.Context), ctx context.Context) {
 	// used to wait for the program to complete
 	doneCount := atomic.Int32{}
 	// Count initialization, which means to wait for len(closeFunS) goroutines
@@ -162,7 +185,16 @@ func doShutdown(closeFunS []func(ctx context.Context), ctx context.Context) erro
 		fun := closeFun
 		go func() {
 			// Call Done when the function exits to notify the parent that the work is done
-			defer func() { doneCount.Add(-1) }()
+			defer func() {
+				if err := recover(); err != nil {
+					if logger == nil {
+						defaultLog.Printf("closeFunc execute panic %v", err)
+					} else {
+						logger.Print(fmt.Sprintf("closeFunc execute panic:%v", err))
+					}
+				}
+				doneCount.Add(-1)
+			}()
 			fun(ctx)
 		}()
 	}
@@ -174,18 +206,11 @@ func doShutdown(closeFunS []func(ctx context.Context), ctx context.Context) erro
 	for doneCount.Load() > 0 {
 		select {
 		case <-ctx.Done():
-			if logger == nil {
-				defaultLog.Printf("Graceful shutdown timeout, forced to end: %v", ctx.Err())
-			} else {
-				logger.Print(fmt.Sprintf("Graceful shutdown timeout, forced to end: %v", ctx.Err()))
-			}
-
-			return ctx.Err()
+			doLog("Graceful shutdown timeout, forced to end: %v", ctx.Err())
 		case <-timer.C:
 			timer.Reset(nextPollInterval(&pollIntervalBase))
 		}
 	}
-	return nil
 }
 
 // Rolling timer interval
@@ -198,4 +223,12 @@ func nextPollInterval(pollIntervalBase *time.Duration) time.Duration {
 		*pollIntervalBase = shutdownPollIntervalMax
 	}
 	return interval
+}
+
+func doLog(format string, param ...any) {
+	if logger == nil {
+		defaultLog.Printf(format, param...)
+	} else {
+		logger.Print(fmt.Sprintf(format, param...))
+	}
 }
