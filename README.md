@@ -2,6 +2,7 @@
 #### 1、**graceful- shutdown提供一个优雅关闭服务的能力**，支持按照优先级（level）分组执行关闭任务，用户可以自定义资源关闭顺序。比如，先关闭http/rpc/mq服务连接，再关闭内部资源连接；   
 #### 2、同一优先级组的任务采用并发执行，提升关闭效率；  
 #### 3、支持设置关闭超时时间。避免因未知问题导致无法关闭服务器
+#### 4、use AddCloserLevelWait 支持执行完一个level的closer之后，等待一段时间，默认不等待
 
 
 # 使用样例
@@ -19,6 +20,10 @@
     func main() {
         gracefulCloser := fly.NewAndMonitor(200*time.Second, os.Interrupt)
         gracefulCloser.AddCloser(0, func(ctx context.Context) {
+            time.Sleep(5 * time.Second)
+            fmt.Println("0-one closed")
+        })
+	 gracefulCloser.AddCloserLevelWait(0, 1*time.Second, func(ctx context.Context) {
             time.Sleep(5 * time.Second)
             fmt.Println("0-one closed")
         })
